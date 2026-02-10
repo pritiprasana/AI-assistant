@@ -1,0 +1,133 @@
+"""
+Document loading utilities.
+"""
+
+import os
+from pathlib import Path
+from typing import List
+
+from langchain.docstore.document import Document
+
+
+class DirectoryLoader:
+    """Loads documents from a directory recursively with AST-aware parsing."""
+
+    def __init__(
+        self, 
+        root_dir: str, 
+        glob_pattern: str = "**/*", 
+        exclude_hidden: bool = True,
+        use_ast: bool = True,
+        exclude_patterns: List[str] = None
+    ):
+        self.root_dir = root_dir
+        self.glob_pattern = glob_pattern
+        self.exclude_hidden = exclude_hidden
+        self.use_ast = use_ast
+        
+        # Default exclude patterns (build dirs, dependencies, etc.)
+        self.exclude_patterns = exclude_patterns or [
+            'node_modules',
+            'dist',
+            'build',
+            '.git',
+            '__pycache__',
+            '.next',
+            '.venv',
+            'venv',
+            'coverage',
+            '.cache'
+        ]
+        
+        # Extensions to process as code/text
+        self.supported_extensions = {
+            # Code
+            '.py', '.js', '.ts', '.tsx', '.jsx', '.html', '.css', '.json',
+            '.c', '.cpp', '.h', '.java', '.go', '.rs',
+            # Docs
+            '.md', '.txt', '.rst', '.yaml', '.yml'
+        }
+        
+        # AST-parseable extensions
+        self.ast_extensions = {'.py', '.js', '.ts', '.tsx', '.jsx'}
+        
+        # Initialize AST loader if requested
+        self.ast_loader = None
+        if self.use_ast:
+            try:
+                from slot_assistant.rag.ast_loader import ASTCodeLoader
+                self.ast_loader = ASTCodeLoader()
+                print("✅ AST-aware parsing enabled")
+            except ImportError as e:
+                print(f"⚠️  AST parsing unavailable: {e}. Falling back to simple parsing.")
+                self.use_ast = False
+
+    def _should_exclude(self, file_path: Path) -> bool:
+        """Check if file should be excluded based on patterns."""
+        path_str = str(file_path)
+        for pattern in self.exclude_patterns:
+            if pattern in path_str:
+                return True
+        return False
+
+    def load(self) -> List[Document]:
+        """Load documents recursively with AST parsing."""
+        documents = []
+        path = Path(self.root_dir)
+        
+        if not path.exists():
+            print(f"Warning: Directory {self.root_dir} does not exist.")
+            return []
+            
+        print(f"Scanning {self.root_dir}...")
+        
+        for file_path in path.rglob(self.glob_pattern):
+            if not file_path.is_file():
+                continue
+            
+            # Exclude hidden files
+            if self.exclude_hidden and any(part.startswith('.') for part in file_path.parts):
+                continue
+            
+            # Check exclude patterns
+            if self._should_exclude(file_path):
+                continue
+                
+            # Check supported extensions
+            if file_path.suffix.lower() not in self.supported_extensions:
+                continue
+            
+            # Use AST parsing for code files if available
+            if self.use_ast and self.ast_loader and file_path.suffix.lower() in self.ast_extensions:
+                try:
+                    chunks = self.ast_loader.load_file(file_path)
+                    documents.extend(chunks)
+                    print(f"  ✓ AST parsed: {file_path.name} ({len(chunks)} chunks)")
+                    continue
+                except Exception as e:
+                    print(f"  ⚠️  AST parse failed for {file_path.name}: {e}")
+                    # Fall through to simple loading
+            
+            # Simple loading for non-code or fallback
+            try:
+                content = file_path.read_text(encoding='utf-8')
+                
+                metadata = {
+                    "source": str(file_path),
+                    "filename": file_path.name,
+                    "extension": file_path.suffix,
+                    "relative_path": str(file_path.relative_to(path))
+                }
+                
+                documents.append(Document(page_content=content, metadata=metadata))
+                print(f"  ✓ Loaded: {file_path.name}")
+                
+            except UnicodeDecodeError:
+                # Skip binary or non-utf8 files
+                continue
+            except Exception as e:
+                print(f"  ✗ Error loading {file_path}: {e}")
+                continue
+                
+        print(f"\n✅ Loaded {len(documents)} document chunks.")
+        return documents
