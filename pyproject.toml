@@ -29,6 +29,9 @@ dependencies = [
     
     # Data Processing
     "tree-sitter>=0.20.4",
+    "tree-sitter-javascript>=0.20.0",
+    "tree-sitter-python>=0.20.0",
+    "tree-sitter-typescript>=0.20.0",
     "datasets>=2.16.0",
     
     # Utilities
